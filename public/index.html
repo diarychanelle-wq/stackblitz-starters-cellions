@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Cellion Prototype</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; }
+    .box { background: #1e293b; border-radius: 12px; padding: 20px; margin-bottom: 20px; border: 1px solid #334155; }
+    .hidden { display: none; }
+    button { cursor: pointer; border: none; border-radius: 6px; padding: 8px 14px; font-weight: bold; }
+    input { padding: 8px; border-radius: 6px; border: 1px solid #475569; background: #0f172a; color: white; }
+    
+    /* Petri Dish Circle Layout */
+    #arena { position: relative; width: 420px; height: 420px; border-radius: 50%; border: 4px dashed #38bdf8; margin: 20px auto; background: #091326; }
+    #bacteria { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 110px; height: 110px; border-radius: 50%; background: #9333ea; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; box-shadow: 0 0 25px #9333ea; }
+    .cell { position: absolute; width: 78px; height: 78px; border-radius: 50%; background: #0284c7; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 11px; text-align: center; transform: translate(-50%, -50%); transition: 0.3s; border: 3px solid transparent; }
+    .cell.active-turn { border-color: #22c55e; box-shadow: 0 0 18px #22c55e; scale: 1.12; }
+    .cell.pending { border-color: #facc15; background: #854d0e; }
+    .cell.dead { opacity: 0.35; background: #475569; }
+
+    /* Grading Rubric Buttons */
+    .btn-wrong { background: #ef4444; color: white; }
+    .btn-10 { background: #64748b; color: white; }
+    .btn-25 { background: #3b82f6; color: white; }
+    .btn-50 { background: #10b981; color: white; }
+    .btn-100 { background: #eab308; color: black; }
+    .queue-card { background: #0f172a; padding: 12px; border-radius: 8px; margin-top: 10px; border-left: 4px solid #facc15; }
+  </style>
+</head>
+<body>
+
+  <!-- Role Selection -->
+  <div id="setup" class="box">
+    <h2>🧬 Cellion (10-Player Prototype)</h2>
+    <input id="nicknameInput" placeholder="Enter Cell Nickname..." />
+    <button onclick="joinAsPlayer()" style="background:#22c55e; color:black;">Join as Cell</button>
+    <button onclick="openTeacherView()" style="background:#a855f7; color:white; margin-left:10px;">Open Teacher Dashboard</button>
+  </div>
+
+  <!-- Player Screen -->
+  <div id="playerView" class="box hidden">
+    <h3 id="promptDisplay">Waiting for teacher to launch a prompt...</h3>
+    <div id="answerControls" class="hidden">
+      <input id="answerInput" placeholder="Type specific bio answer..." style="width: 65%;" onkeydown="if(event.key==='Enter') submitAnswer()" />
+      <button onclick="submitAnswer()" style="background:#22c55e; color:black;">Pass Potato!</button>
+    </div>
+
+    <div id="arena">
+      <div id="bacteria">
+        <div style="font-size:11px; font-weight:bold;">PATHOGEN</div>
+        <div id="timerDisplay" style="font-size:26px; font-weight:900; color:#f87171;">--</div>
+      </div>
+      <div id="cellsContainer"></div>
+    </div>
+  </div>
+
+  <!-- Teacher Dashboard -->
+  <div id="teacherView" class="box hidden">
+    <h2>📋 Teacher / Host Control Panel</h2>
+    <div>
+      <input id="promptInput" placeholder="Prompt (e.g. Name a type of protein)" style="width: 45%;" />
+      <input id="timerInput" type="number" value="15" style="width: 60px;" title="Seconds" /> sec
+      <button onclick="startRound()" style="background:#22c55e; color:black;">Send Prompt</button>
+    </div>
+    <p id="teacherStatus" style="color:#94a3b8;">Connected Cells: 0/10</p>
+    <hr style="border-color:#334155;">
+    <h3>Pending Grading Queue</h3>
+    <div id="pendingList">No pending answers yet.</div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    let myId = null;
+
+    socket.on('connect', () => { myId = socket.id; });
+    socket.on('error_msg', (msg) => alert(msg));
+
+    function joinAsPlayer() {
+      const nick = document.getElementById('nicknameInput').value.trim();
+      socket.emit('join_game', nick);
+      document.getElementById('setup').classList.add('hidden');
+      document.getElementById('playerView').classList.remove('hidden');
+    }
+
+    function openTeacherView() {
+      document.getElementById('setup').classList.add('hidden');
+      document.getElementById('teacherView').classList.remove('hidden');
+    }
+
+    function startRound() {
+      const prompt = document.getElementById('promptInput').value.trim();
+      const duration = document.getElementById('timerInput').value;
+      if (!prompt) return alert('Enter a prompt first!');
+      socket.emit('start_round', { prompt, duration });
+    }
+
+    function submitAnswer() {
+      const input = document.getElementById('answerInput');
+      if (!input.value.trim()) return;
+      socket.emit('submit_answer', input.value.trim());
+      input.value = '';
+    }
+
+    function grade(playerId, gradeType) {
+      socket.emit('grade_answer', { playerId, gradeType });
+    }
+
+    socket.on('timer_tick', (t) => {
+      document.getElementById('timerDisplay').innerText = `0:${t < 10 ? '0' + t : t}`;
+    });
+
+    socket.on('state_update', (state) => {
+      // Update Prompt & Input Visibility
+      document.getElementById('promptDisplay').innerText = state.currentPrompt || 'Waiting for prompt...';
+      document.getElementById('timerDisplay').innerText = state.roundActive ? `0:${state.timeLeft < 10 ? '0' + state.timeLeft : state.timeLeft}` : '--';
+
+      const isMyTurn = state.roundActive && state.currentTargetId === myId;
+      document.getElementById('answerControls').classList.toggle('hidden', !isMyTurn);
+      if (isMyTurn) document.getElementById('answerInput').focus();
+
+      // Render 10-Player Circle Ring using Trig
+      const container = document.getElementById('cellsContainer');
+      container.innerHTML = '';
+      const radius = 165;
+      const center = 210;
+
+      state.players.forEach((p, idx) => {
+        const angle = (idx / state.players.length) * (2 * Math.PI) - (Math.PI / 2);
+        const x = center + radius * Math.cos(angle);
+        const y = center + radius * Math.sin(angle);
+
+        const div = document.createElement('div');
+        div.className = 'cell';
+        if (p.id === state.currentTargetId && state.roundActive) div.classList.add('active-turn');
+        if (p.status === 'pending') div.classList.add('pending');
+        if (p.lives <= 0) div.classList.add('dead');
+
+        div.style.left = `${x}px`;
+        div.style.top = `${y}px`;
+        div.innerHTML = `<strong>${p.nickname}</strong><span>⚡${p.atp} | ❤️${p.lives}</span><span style="font-size:9px;">${p.status}</span>`;
+        container.appendChild(div);
+      });
+
+      // Update Teacher Dashboard
+      document.getElementById('teacherStatus').innerText = `Connected Cells: ${state.players.length}/10 | Round Active: ${state.roundActive}`;
+      const pendingDiv = document.getElementById('pendingList');
+      if (state.pendingQueue.length === 0) {
+        pendingDiv.innerHTML = 'No pending answers right now.';
+      } else {
+        pendingDiv.innerHTML = state.pendingQueue.map(item => `
+          <div class="queue-card">
+            <div><strong>${item.nickname}:</strong> "${item.answer}"</div>
+            <div style="margin-top:8px; display:flex; gap:6px;">
+              <button class="btn-wrong" onclick="grade('${item.playerId}', 'WRONG')">WRONG (-1 ❤️)</button>
+              <button class="btn-10" onclick="grade('${item.playerId}', '10')">+10 Basic</button>
+              <button class="btn-25" onclick="grade('${item.playerId}', '25')">+25 Specific</button>
+              <button class="btn-50" onclick="grade('${item.playerId}', '50')">+50 Defined</button>
+              <button class="btn-100" onclick="grade('${item.playerId}', '100')">+100 Applied</button>
+            </div>
+          </div>
+        `).join('');
+      }
+    });
+  </script>
+</body>
+</html>
